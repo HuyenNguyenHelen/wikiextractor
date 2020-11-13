@@ -34,9 +34,6 @@ syntaxhighlight = re.compile('&lt;syntaxhighlight .*?&gt;(.*?)&lt;/syntaxhighlig
 
 ## PARAMS ####################################################################
 
-# This is obtained from <siteinfo>
-urlbase = ''
-
 ##
 # Defined in <siteinfo>
 # We include as default Template, when loading external template file.
@@ -62,8 +59,8 @@ discardElements = [
 acceptedNamespaces = ['w', 'wiktionary', 'wikt']
 
 
-def get_url(uid):
-    return "%s?curid=%s" % (options.urlbase, uid)
+def get_url(urlbase, uid):
+    return "%s?curid=%s" % (urlbase, uid)
 
 
 # ======================================================================
@@ -268,8 +265,7 @@ def compact(text, mark_headers=False):
             continue
         elif len(headers):
             if Extractor.keepSections:
-                items = headers.items()
-                items.sort()
+                items = sorted(headers.items(), key=lambda k:k[0])
                 for (i, v) in items:
                     page.append(v)
             headers.clear()
@@ -289,7 +285,7 @@ def handle_unicode(entity):
     numeric_code = int(entity[2:-1])
     if numeric_code >= 0x10000:
         return ''
-    return unichr(numeric_code)
+    return chr(numeric_code)
 
 
 # ----------------------------------------------------------------------
@@ -427,7 +423,7 @@ def replaceExternalLinks(text):
 def makeExternalLink(url, anchor):
     """Function applied to wikiLinks"""
     if Extractor.keepLinks:
-        return '<a href="%s">%s</a>' % (urllib.quote(url.encode('utf-8')), anchor)
+        return '<a href="%s">%s</a>' % (urllib.quote(url), anchor)
     else:
         return anchor
 
@@ -497,7 +493,7 @@ def makeInternalLink(title, label):
         if colon2 > 1 and title[colon + 1:colon2] not in acceptedNamespaces:
             return ''
     if Extractor.keepLinks:
-        return '<a href="%s">%s</a>' % (urllib.quote(title.encode('utf-8')), label)
+        return '<a href="%s">%s</a>' % (urllib.quote(title), label)
     else:
         return label
 
@@ -729,11 +725,11 @@ def unescape(text):
         try:
             if text[1] == "#":  # character reference
                 if text[2] == "x":
-                    return unichr(int(code[1:], 16))
+                    return chr(int(code[1:], 16))
                 else:
-                    return unichr(int(code))
+                    return chr(int(code))
             else:  # named entity
-                return unichr(name2codepoint[code])
+                return chr(name2codepoint[code])
         except:
             return text  # leave as is
 
@@ -814,6 +810,7 @@ class Extractor(object):
     ##
     # Whether to output HTML instead of text
     toHTML = False
+    urlbase = ''
 
     def __init__(self, id, title, page):
         """
@@ -856,18 +853,17 @@ class Extractor(object):
         logging.debug("%s\t%s", self.id, self.title)
         text = ''.join(self.page)
 
-        url = get_url(self.id)
+        url = get_url(self.urlbase, self.id)
         header = '<doc id="%s" url="%s" title="%s">\n' % (self.id, url, self.title)
         # Separate header from text with a newline.
         header += self.title + '\n\n'
-        header = header.encode('utf-8')
         footer = "\n</doc>\n"
         out.write(header)
 
         text = self.clean_text(text)
 
         for line in text:
-            out.write(line.encode('utf-8'))
+            out.write(line)
             out.write('\n')
         out.write(footer)
         errs = (self.template_title_errs,
@@ -1432,7 +1428,7 @@ def fullyQualifiedTemplateTitle(templateTitle):
     # space]], but having in the system a redirect page with an empty title
     # causes numerous problems, so we'll live happier without it.
     if templateTitle:
-        return templatePrefix + ucfirst(templateTitle)
+        return ucfirst(templateTitle)
     else:
         return ''  # caller may log as error
 
@@ -1482,7 +1478,7 @@ def sharp_expr(expr):
         expr = re.sub('mod', '%', expr)
         expr = re.sub('\bdiv\b', '/', expr)
         expr = re.sub('\bround\b', '|ROUND|', expr)
-        return unicode(eval(expr))
+        return str(eval(expr))
     except:
         return '<span class="error"></span>'
 
@@ -1622,7 +1618,7 @@ parserFunctions = {
 
     # This function is used in some pages to construct links
     # http://meta.wikimedia.org/wiki/Help:URL
-    'urlencode': lambda string, *rest: urllib.quote(string.encode('utf-8')),
+    'urlencode': lambda string, *rest: urllib.quote(string),
 
     'lc': lambda string, *rest: string.lower() if string else '',
 

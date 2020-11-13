@@ -59,7 +59,7 @@ from io import StringIO
 from multiprocessing import Queue, Process, cpu_count
 from timeit import default_timer
 
-from .extract import Extractor, ignoreTag
+from wikiextractor.extract import Extractor, ignoreTag
 
 # ===========================================================================
 
@@ -138,7 +138,7 @@ class NextFile(object):
     def _dirname(self):
         char1 = self.dir_index % 26
         char2 = self.dir_index / 26 % 26
-        return os.path.join(self.path_name, '%c%c' % (ord('A') + char2, ord('A') + char1))
+        return os.path.join(self.path_name, '%c%c' % (int(ord('A') + char2), int(ord('A') + char1)))
 
     def _filepath(self):
         return '%s/wiki_%02d' % (self._dirname(), self.file_index)
@@ -203,7 +203,6 @@ def load_templates(file, output_file=None):
     if output_file:
         output = codecs.open(output_file, 'wb', 'utf-8')
     for line in file:
-        line = line.decode('utf-8')
         if '<' not in line:  # faster than doing re.search()
             if inText:
                 page.append(line)
@@ -280,7 +279,6 @@ def process_dump(input_file, template_file, out_file, file_size, file_compress,
 
     # collect siteinfo
     for line in input:
-        line = line.decode('utf-8')
         m = tagRE.search(line)
         if not m:
             continue
@@ -289,7 +287,7 @@ def process_dump(input_file, template_file, out_file, file_size, file_compress,
             # discover urlbase from the xml dump file
             # /mediawiki/siteinfo/base
             base = m.group(3)
-            urlbase = base[:base.rfind("/")]
+            Extractor.urlbase = base[:base.rfind("/")]
         elif tag == 'namespace':
             knownNamespaces.add(m.group(3))
             if re.search('key="10"', line):
@@ -350,7 +348,7 @@ def process_dump(input_file, template_file, out_file, file_size, file_compress,
     # start worker processes
     logging.info("Using %d extract processes.", process_count)
     workers = []
-    for _ in xrange(max(1, process_count)):
+    for _ in range(max(1, process_count)):
         extractor = Process(target=extract_process,
                             args=(jobs_queue, output_queue))
         extractor.daemon = True  # only live while parent process lives
@@ -368,7 +366,6 @@ def process_dump(input_file, template_file, out_file, file_size, file_compress,
     inText = False
     redirect = False
     for line in input:
-        line = line.decode('utf-8')
         if '<' not in line:  # faster than doing re.search()
             if inText:
                 page.append(line)
