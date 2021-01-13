@@ -19,9 +19,10 @@
 # =============================================================================
 
 import re
-import cgi
+import html
+import json
 from itertools import zip_longest
-import urllib
+from urllib.parse import quote as urlencode
 from html.entities import name2codepoint
 import logging
 import time
@@ -66,10 +67,15 @@ def get_url(urlbase, uid):
 # ======================================================================
 
 
-def clean(extractor, text, expand_templates=False, escape_doc=True):
+def clean(extractor, text, expand_templates=False, html_safe=True):
     """
     Transforms wiki markup. If the command line flag --escapedoc is set then the text is also escaped
     @see https://www.mediawiki.org/wiki/Help:Formatting
+    :param extractor: the Extractor t use.
+    :param text: the text to clean.
+    :param expand_templates: whether to perform template expansion.
+    :param html_safe: whether to convert reserved HTML characters to entities.
+    @return: the cleaned text.
     """
 
     if expand_templates:
@@ -104,7 +110,7 @@ def clean(extractor, text, expand_templates=False, escape_doc=True):
     text = res + unescape(text[cur:])
 
     # Handle bold/italic/quote
-    if extractor.toHTML:
+    if extractor.HtmlFormatting:
         text = bold_italic.sub(r'<b>\1</b>', text)
         text = bold.sub(r'<b>\1</b>', text)
         text = italic.sub(r'<i>\1</i>', text)
@@ -143,7 +149,7 @@ def clean(extractor, text, expand_templates=False, escape_doc=True):
     for tag in discardElements:
         text = dropNested(text, r'<\s*%s\b[^>/]*>' % tag, r'<\s*/\s*%s>' % tag)
 
-    if not extractor.toHTML:
+    if not extractor.HtmlFormatting:
         # Turn into text what is left (&amp;nbsp;) and <syntaxhighlight>
         text = unescape(text)
 
@@ -166,8 +172,8 @@ def clean(extractor, text, expand_templates=False, escape_doc=True):
     text = re.sub(u'(\[\(«) ', r'\1', text)
     text = re.sub(r'\n\W+?\n', '\n', text, flags=re.U)  # lines with only punctuations
     text = text.replace(',,', ',').replace(',.', '.')
-    if escape_doc:
-        text = cgi.escape(text)
+    if html_safe:
+        text = html.escape(text, quote=False)
     return text
 
 
@@ -199,7 +205,7 @@ def compact(text, mark_headers=False):
         if m:
             title = m.group(2)
             lev = len(m.group(1))
-            if Extractor.toHTML:
+            if Extractor.HtmlFormatting:
                 page.append("<h%d>%s</h%d>" % (lev, title, lev))
             if title and title[-1] not in '!?':
                 title += '.'
@@ -209,9 +215,7 @@ def compact(text, mark_headers=False):
 
             headers[lev] = title
             # drop previous headers
-            for i in headers.keys():
-                if i > lev:
-                    del headers[i]
+            headers = { k:v for k,v in headers.items() if k <= lev }
             emptySection = True
             continue
         # Handle page title
@@ -227,7 +231,7 @@ def compact(text, mark_headers=False):
             continue
         # handle lists
         elif line[0] in '*#;:':
-            if Extractor.toHTML:
+            if Extractor.HtmlFormatting:
                 i = 0
                 for c, n in zip_longest(listLevel, line, fillvalue=''):
                     if not n or n not in '*#;:':
@@ -279,13 +283,6 @@ def compact(text, mark_headers=False):
             #     continue
 
     return page
-
-
-def handle_unicode(entity):
-    numeric_code = int(entity[2:-1])
-    if numeric_code >= 0x10000:
-        return ''
-    return chr(numeric_code)
 
 
 # ----------------------------------------------------------------------
@@ -423,7 +420,7 @@ def replaceExternalLinks(text):
 def makeExternalLink(url, anchor):
     """Function applied to wikiLinks"""
     if Extractor.keepLinks:
-        return '<a href="%s">%s</a>' % (urllib.quote(url), anchor)
+        return '<a href="%s">%s</a>' % (urlencode(url), anchor)
     else:
         return anchor
 
@@ -493,7 +490,7 @@ def makeInternalLink(title, label):
         if colon2 > 1 and title[colon + 1:colon2] not in acceptedNamespaces:
             return ''
     if Extractor.keepLinks:
-        return '<a href="%s">%s</a>' % (urllib.quote(title), label)
+        return '<a href="%s">%s</a>' % (urlencode(title), label)
     else:
         return label
 
@@ -502,7 +499,7 @@ def makeInternalLink(title, label):
 # variables
 
 
-class MagicWords(object):
+class MagicWords():
 
     """
     One copy in each Extractor.
@@ -794,8 +791,7 @@ dots = re.compile(r'\.{4,}')
 substWords = 'subst:|safesubst:'
 
 
-class Extractor(object):
-
+class Extractor():
     """
     An extraction task on a article.
     """
@@ -808,15 +804,20 @@ class Extractor(object):
     keepSections = True
 
     ##
-    # Whether to output HTML instead of text
-    toHTML = False
-    urlbase = ''
+    # Whether to output text with HTML formatting elements in <doc> files.
+    HtmlFormatting = False
 
-    def __init__(self, id, title, page):
+    ##
+    # Whether to produce json instead of the default <doc> output format.
+    toJson = False
+
+    def __init__(self, id, revid, urlbase, title, page):
         """
         :param page: a list of lines.
         """
         self.id = id
+        self.revid = revid
+        self.url = get_url(urlbase, id)
         self.title = title
         self.page = page
         self.magicWords = MagicWords()
@@ -827,7 +828,7 @@ class Extractor(object):
         self.template_title_errs = 0
 
     def clean_text(self, text, mark_headers=False, expand_templates=False,
-                   escape_doc=True):
+                   html_safe=True):
         """
         :param mark_headers: True to distinguish headers from paragraphs
           e.g. "## Section 1"
@@ -841,31 +842,41 @@ class Extractor(object):
         self.magicWords['currenttime'] = time.strftime('%H:%M:%S')
 
         text = clean(self, text, expand_templates=expand_templates,
-                     escape_doc=escape_doc)
+                     html_safe=html_safe)
 
         text = compact(text, mark_headers=mark_headers)
         return text
 
-    def extract(self, out):
+    def extract(self, out, html_safe=True):
         """
         :param out: a memory file.
+        :param html_safe: whether to escape HTML entities.
         """
         logging.debug("%s\t%s", self.id, self.title)
         text = ''.join(self.page)
+        text = self.clean_text(text, html_safe=html_safe)
 
-        url = get_url(self.urlbase, self.id)
-        header = '<doc id="%s" url="%s" title="%s">\n' % (self.id, url, self.title)
-        # Separate header from text with a newline.
-        header += self.title + '\n\n'
-        footer = "\n</doc>\n"
-        out.write(header)
-
-        text = self.clean_text(text)
-
-        for line in text:
-            out.write(line)
+        if self.to_json:
+            json_data = {
+		'id': self.id,
+                'revid': self.revid,
+                'url': self.url,
+                'title': self.title,
+                'text': "\n".join(text)
+            }
+            out_str = json.dumps(json_data)
+            out.write(out_str)
             out.write('\n')
-        out.write(footer)
+        else:
+            header = '<doc id="%s" url="%s" title="%s">\n' % (self.id, self.url, self.title)
+            # Separate header from text with a newline.
+            header += self.title + '\n\n'
+            footer = "\n</doc>\n"
+            out.write(header)
+            out.write('\n'.join(text))
+            out.write('\n')
+            out.write(footer)
+
         errs = (self.template_title_errs,
                 self.recursion_exceeded_1_errs,
                 self.recursion_exceeded_2_errs,
@@ -1443,7 +1454,7 @@ def normalizeNamespace(ns):
 # https://github.com/Wikia/app/blob/dev/extensions/ParserFunctions/ParserFunctions_body.php
 
 
-class Infix:
+class Infix():
 
     """Infix operators.
     The calling sequence for the infix is:
@@ -1618,7 +1629,7 @@ parserFunctions = {
 
     # This function is used in some pages to construct links
     # http://meta.wikimedia.org/wiki/Help:URL
-    'urlencode': lambda string, *rest: urllib.quote(string),
+    'urlencode': lambda string, *rest: urlencode(string),
 
     'lc': lambda string, *rest: string.lower() if string else '',
 

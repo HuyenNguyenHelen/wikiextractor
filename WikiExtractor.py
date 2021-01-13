@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 # =============================================================================
-#  Version: 2.75 (March 4, 2017)
+#  Version: 3.0 (July 22, 2020)
 #  Author: Giuseppe Attardi (attardi@di.unipi.it), University of Pisa
 #
 #  Contributors:
@@ -14,24 +14,24 @@
 #   Pedro Assis (pedroh2306@gmail.com)
 #   Wim Muskee (wimmuskee@gmail.com)
 #   Radics Geza (radicsge@gmail.com)
-#   orangain (orangain@gmail.com)
-#   Seth Cleveland (scleveland@turnitin.com)
-#   Bren Barn
+#   Nick Ulven (nulven@github)
 #
 # =============================================================================
-#  Copyright (c) 2011-2017. Giuseppe Attardi (attardi@di.unipi.it).
+#  Copyright (c) 2009-2020. Giuseppe Attardi (attardi@di.unipi.it).
 # =============================================================================
 #  This file is part of Tanl.
 #
 #  Tanl is free software; you can redistribute it and/or modify it
-#  under the terms of the GNU General Public License, version 3,
+#  under the terms of the GNU Affero General Public License, version 3,
 #  as published by the Free Software Foundation.
 #
 #  Tanl is distributed in the hope that it will be useful,
 #  but WITHOUT ANY WARRANTY; without even the implied warranty of
 #  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#  GNU General Public License at <http://www.gnu.org/licenses/> for more details.
+#  GNU Affero General Public License for more details.
 #
+#  You should have received a copy of the GNU Affero General Public License
+#  along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # =============================================================================
 
 """Wikipedia Extractor:
@@ -49,9 +49,8 @@ the following structure
 
     {"id": "", "revid": "", "url":"", "title": "", "text": "..."}
 
-Template expansion requires preprocesssng first the whole dump and
+The program performs template expansion by preprocesssng the whole dump and
 collecting template definitions.
-
 """
 
 from __future__ import unicode_literals, division
@@ -71,6 +70,7 @@ from io import StringIO
 from multiprocessing import Queue, Process, Value, cpu_count
 from timeit import default_timer
 
+import numpy as np
 
 PY2 = sys.version_info[0] == 2
 # Python 2.7 compatibiity
@@ -554,6 +554,7 @@ class Extractor(object):
         self.revid = revid
         self.title = title
         self.text = ''.join(lines)
+        self.categories = []
         self.magicWords = MagicWords()
         self.frame = Frame()
         self.recursion_exceeded_1_errs = 0  # template recursion within expand()
@@ -606,11 +607,156 @@ class Extractor(object):
                 out.write('\n')
             out.write(footer)
 
+    def write_to_paragraphs(self, out, pars, max_word_per_example=None, min_word_per_example=None, verbose=False):
+        """
+        :param out: a memory file
+        :param pars: a list of text
+        :param min_length:
+
+        """
+        # throw away very short passages
+        # concatenate short passages to a long text, pars could be empty
+        if max_word_per_example and max_word_per_example > 0 and len(pars) > 0:
+            new_pars = []
+            tmp_par = []
+            tmp_par_len = 0
+            for par in pars:
+                if tmp_par_len + len(par.split()) >= max_word_per_example:
+                    tmp_par = ' '.join(tmp_par)
+                    # tmp_par = ' \n '.join(tmp_par)
+                    new_pars.append(tmp_par)
+                    tmp_par = [par]
+                    tmp_par_len = len(par.split())
+                else:
+                    tmp_par.append(par)
+                    tmp_par_len += len(par.split())
+            if len(tmp_par) > 0:
+                tmp_par = ' '.join(tmp_par)
+                # tmp_par = ' \n '.join(tmp_par)
+                new_pars.append(tmp_par)
+
+            if verbose:
+                logging.info('Merge short paragraphs to up to %d characters' % max_word_per_example)
+                logging.info('\t\t#before=%d, avg #word=%d' % (len(pars), np.mean([len(p.split()) for p in pars])))
+                logging.info('\t\t#after=%d, avg #word=%d' % (len(new_pars), np.mean([len(p.split()) for p in new_pars])))
+            pars = new_pars
+
+        url = get_url(self.id)
+        for par in pars:
+            if options.write_json:
+                len_par = len(par.split())
+                if verbose:
+                    logging.info('#(word) in par=%d, title=%s' % (len_par, self.title))
+                if min_word_per_example and len_par < min_word_per_example:
+                    if verbose:
+                        logging.info('DROP OUT a short example')
+                        print(par)
+                    continue
+
+                json_data = {
+                    'id': self.id,
+                    # 'url': url,
+                    'title': self.title,
+                    'text': par
+                }
+                if options.extract_categories:
+                    json_data['categories'] = self.categories
+
+                if options.print_revision:
+                    json_data['revid'] = self.revid
+
+                out_str = json.dumps(json_data, ensure_ascii=False)
+                if verbose:
+                    print(out_str)
+
+                if out == sys.stdout:   # option -a or -o -
+                    out_str = out_str.encode('utf-8')
+                out.write(out_str + '\n')
+            else:
+                out.write(par + '\n\n')
+
+    def write_to_sections(self, out, secs, max_word_per_example=None, min_word_per_example=None, verbose=False):
+        """
+        :param out: a memory file
+        :param secs: a list of text
+        :param min_length:
+
+        """
+        if len(secs) == 0:
+            return
+
+        # split a long section (of multiple paragraphs) to multiple short texts, up to max_word_per_example words
+        if max_word_per_example and max_word_per_example > 0:
+            new_secs = []
+            for sec in secs:
+                if len(sec['text']) == 0:
+                    continue
+                tmp_lines = []
+                tmp_text_len = 0
+                for line in sec['text']:
+                    if tmp_text_len + len(line.split()) >= max_word_per_example:
+                        _text = ' '.join(tmp_lines)
+                        # _text = ' \n '.join(tmp_lines)
+                        newsec = {
+                            'headers': sec['headers'] ,
+                            'text': _text,
+                        }
+                        new_secs.append(newsec)
+                        tmp_lines = [line]
+                        tmp_text_len = len(line.split())
+                    else:
+                        tmp_lines.append(line)
+                        tmp_text_len += len(line.split())
+                if len(tmp_lines) > 0:
+                    _text = ' '.join(tmp_lines)
+                    # _text = ' \n '.join(tmp_lines)
+                    newsec = {
+                        'headers': sec['headers'],
+                        'text': _text,
+                    }
+                    new_secs.append(newsec)
+
+            if verbose:
+                logging.info('Merge short paragraphs to up to %d characters' % max_word_per_example)
+                logging.info('\t\t#before=%d, avg #word=%d' % (sum([len(sec['text']) for sec in secs]), np.mean([len(par.split()) for sec in secs for par in sec['text']])))
+                logging.info('\t\t#after=%d, avg #word=%d' % (len(new_secs), np.mean([len(sec['text'].split()) for sec in new_secs])))
+            secs = new_secs
+
+        url = get_url(self.id)
+        for sec in secs:
+            if options.write_json:
+                sec['id'] = self.id
+                sec['title'] = self.title
+                if options.extract_categories:
+                    sec['categories'] = self.categories
+                if options.extract_seealso:
+                    sec['seealso'] = self.seealso
+
+                len_section = len(sec['text'].split())
+                if verbose:
+                    logging.info('#(word) in sec=%d, title=%s' % (len_section, self.title))
+                if min_word_per_example and len_section < min_word_per_example:
+                    if verbose:
+                        logging.info('DROP OUT a short example')
+                        print(sec['text'])
+                    continue
+
+                out_str = json.dumps(sec, ensure_ascii=False)
+                if out == sys.stdout:   # option -a or -o -
+                    out_str = out_str.encode('utf-8')
+                if verbose:
+                    logging.info(out_str)
+                out.write(out_str + '\n')
+            else:
+                raise NotImplementedError('Only json format supported')
+                # out.write(sec + '\n\n')
+
+
     def extract(self, out):
         """
         :param out: a memory file.
         """
-        logging.info('%s\t%s', self.id, self.title)
+        logging.info('id=%s\ttitle=%s', self.id, self.title)
 
         # Separate header from text with a newline.
         if options.toHTML:
@@ -660,16 +806,45 @@ class Extractor(object):
         if options.extract_categories:
             # Extract categories but not sortkeys
             rgx_category = r'\[\[%s:([^|\]]+)(?:|[^\]]+)?\]\]' % options.category_surface
-            categories = re.findall(rgx_category, text)
-        text = self.wiki2text(text)
-        text = compact(self.clean(text))
-        # from zwChan
-        text = [title_str] + text
+            self.categories = re.findall(rgx_category, text)
+            # logging.info(self.categories)
+        if options.extract_seealso:
+            # Extract categories but not sortkeys
+            self.seealso = extract_seealso(text)
+            # logging.info(self.seealso)
+        if options.remove_trailing_sections:
+            text = remove_trailing_sections(text)
+        if options.dump_type == "fulltext":
+            text = self.wiki2text(text)
+            text = self.clean(text)
+            text = compact(text)
+            # from zwChan
+            text = [title_str] + text
+            if sum(len(line) for line in text) < options.min_text_length:
+                return
+            self.write_output(out, text, categories)
+        elif options.dump_type == "paragraph":
+            text = self.wiki2text(text)
+            text = self.clean(text)
+            lines = compact(text)
 
-        if sum(len(line) for line in text) < options.min_text_length:
-            return
+            self.write_to_paragraphs(out, lines,
+                                     max_word_per_example=options.max_word_per_example,
+                                     min_word_per_example=options.min_word_per_example,
+                                     verbose=options.verbose
+                                     )
+        elif options.dump_type == "phrase":
+            text = self.wiki2text_kp(text)
+            # par_dicts = self.extract_phrases(text)
+            lines, sections = compact_kp(text)
 
-        self.write_output(out, text, categories)
+            self.write_to_sections(out, sections,
+                                   max_word_per_example=options.max_word_per_example,
+                                   min_word_per_example=options.min_word_per_example,
+                                   verbose=options.verbose
+                                   )
+        else:
+            raise NotImplementedError("Unsupported dump type " + options.dump_type)
 
         errs = (self.template_title_errs,
                 self.recursion_exceeded_1_errs,
@@ -761,6 +936,71 @@ class Extractor(object):
             cur = m.end()
         text = res + unescape(text[cur:])
         return text
+
+
+    def wiki2text_kp(self, text):
+        # Same as wiki2text except no removal of bold/italic text and internal links
+
+        # Drop tables
+        # first drop residual templates, or else empty parameter |} might look like end of table.
+        if not options.keep_tables:
+            text = dropNested(text, r'{{', r'}}')
+            text = dropNested(text, r'{\|', r'\|}')
+
+        # remove internal links like files and images
+        text = replaceFileCategoryLinks(text)
+
+        # replace external links
+        text = replaceExternalLinks(text)
+
+        # drop MagicWords behavioral switches
+        text = magicWordsRE.sub('', text)
+
+        # ############### Process HTML ###############
+
+        # turn into HTML, except for the content of <syntaxhighlight>
+        res = ''
+        cur = 0
+        for m in syntaxhighlight.finditer(text):
+            res += unescape(text[cur:m.start()]) + m.group(1)
+            cur = m.end()
+        text = res + unescape(text[cur:])
+
+        text = self.clean(text)
+
+        return text
+
+
+    def extract_phrases(self, text):
+        # Extract bold/italic text and internal links
+        pars = [p.strip() for p in text.split('\n') if len(p.strip()) > 0]
+
+        for i, par in enumerate(pars):
+            # Extract bold/anchor texts
+            styled_phrases = bold_italic.findall(par)
+            styled_phrases += bold.findall(par)
+            styled_phrases += italic_quote.findall(par)
+            styled_phrases += italic.findall(par)
+            styled_phrases += quote_quote.findall(par)
+            styled_phrases = list(set(styled_phrases))
+
+            # Handle bold/italic/quote
+            par = bold_italic.sub(r'\1', par)
+            par = bold.sub(r'\1', par)
+            par = italic_quote.sub(r'"\1"', par)
+            par = italic.sub(r'"\1"', par)
+            par = quote_quote.sub(r'"\1"', par)
+            # replace internal links
+            par, anchor_phrases = replaceInternalLinks(par, return_anchor_text=True)
+            anchor_phrases = list(set(anchor_phrases))
+
+            pars[i] = {
+                        'text': par,
+                        'styled_phrases': styled_phrases,
+                        'anchor_phrases': anchor_phrases,
+                       }
+
+        return pars
 
 
     def clean(self, text):
@@ -2119,7 +2359,34 @@ def dropSpans(spans, text):
 # Also: [[Help:IPA for Catalan|[andora]]]
 
 
-def replaceInternalLinks(text):
+def replaceFileCategoryLinks(text):
+    """
+    add by @memray, remove special internal links like files and categories
+    """
+    # triple closing ]]].
+    cur = 0
+    res = ''
+    for s, e in findBalanced(text):
+        m = tailRE.match(text, e)
+        if m:
+            trail = m.group(0)
+            end = m.end()
+        else:
+            trail = ''
+            end = e
+        inner = text[s + 2:e - 2]
+
+        if inner.startswith('File:') or inner.startswith('Category:'):
+            # remove this part (file/image/catogory)
+            res += text[cur:s] + trail
+        else:
+            # no operation
+            res += text[cur:e]
+        cur = end
+    return res + text[cur:]
+
+
+def replaceInternalLinks(text, return_anchor_text=False):
     """
     Replaces internal links of the form:
     [[title |...|label]]trail
@@ -2132,6 +2399,7 @@ def replaceInternalLinks(text):
     # triple closing ]]].
     cur = 0
     res = ''
+    phrase_list = []
     for s, e in findBalanced(text):
         m = tailRE.match(text, e)
         if m:
@@ -2156,274 +2424,15 @@ def replaceInternalLinks(text):
                     pipe = last  # advance
                 curp = e1
             label = inner[pipe + 1:].strip()
+
+        # phrase_list.append(title.strip())
+        phrase_list.append(label.strip())
         res += text[cur:s] + makeInternalLink(title, label) + trail
         cur = end
-    return res + text[cur:]
-
-
-# the official version is a method in class Parser, similar to this:
-# def replaceInternalLinks2(text):
-#     global wgExtraInterlanguageLinkPrefixes
-
-#     # the % is needed to support urlencoded titles as well
-#     tc = Title::legalChars() + '#%'
-#     # Match a link having the form [[namespace:link|alternate]]trail
-#     e1 = re.compile("([%s]+)(?:\\|(.+?))?]](.*)" % tc, re.S | re.D)
-#     # Match cases where there is no "]]", which might still be images
-#     e1_img = re.compile("([%s]+)\\|(.*)" % tc, re.S | re.D)
-
-#     holders = LinkHolderArray(self)
-
-#     # split the entire text string on occurrences of [[
-#     iterBrackets = re.compile('[[').finditer(text)
-
-#     m in iterBrackets.next()
-#     # get the first element (all text up to first [[)
-#     s = text[:m.start()]
-#     cur = m.end()
-
-#     line = s
-
-#     useLinkPrefixExtension = self.getTargetLanguage().linkPrefixExtension()
-#     e2 = None
-#     if useLinkPrefixExtension:
-#         # Match the end of a line for a word that is not followed by whitespace,
-#         # e.g. in the case of "The Arab al[[Razi]]",  "al" will be matched
-#         global wgContLang
-#         charset = wgContLang.linkPrefixCharset()
-#         e2 = re.compile("((?>.*[^charset]|))(.+)", re.S | re.D | re.U)
-
-#     if self.mTitle is None:
-#         raise MWException(__METHOD__ + ": \self.mTitle is null\n")
-
-#     nottalk = not self.mTitle.isTalkPage()
-
-#     if useLinkPrefixExtension:
-#         m = e2.match(s)
-#         if m:
-#             first_prefix = m.group(2)
-#         else:
-#             first_prefix = false
-#     else:
-#         prefix = ''
-
-#     useSubpages = self.areSubpagesAllowed()
-
-#     for m in iterBrackets:
-#         line = text[cur:m.start()]
-#         cur = m.end()
-
-#         # TODO: Check for excessive memory usage
-
-#         if useLinkPrefixExtension:
-#             m = e2.match(e2)
-#             if m:
-#                 prefix = m.group(2)
-#                 s = m.group(1)
-#             else:
-#                 prefix = ''
-#             # first link
-#             if first_prefix:
-#                 prefix = first_prefix
-#                 first_prefix = False
-
-#         might_be_img = False
-
-#         m = e1.match(line)
-#         if m: # page with normal label or alt
-#             label = m.group(2)
-#             # If we get a ] at the beginning of m.group(3) that means we have a link that is something like:
-#             # [[Image:Foo.jpg|[http://example.com desc]]] <- having three ] in a row fucks up,
-#             # the real problem is with the e1 regex
-#             # See bug 1300.
-#             #
-#             # Still some problems for cases where the ] is meant to be outside punctuation,
-#             # and no image is in sight. See bug 2095.
-#             #
-#             if label and m.group(3)[0] == ']' and '[' in label:
-#                 label += ']' # so that replaceExternalLinks(label) works later
-#                 m.group(3) = m.group(3)[1:]
-#             # fix up urlencoded title texts
-#             if '%' in m.group(1):
-#                 # Should anchors '#' also be rejected?
-#                 m.group(1) = str_replace(array('<', '>'), array('&lt', '&gt'), rawurldecode(m.group(1)))
-#             trail = m.group(3)
-#         else:
-#             m = e1_img.match(line):
-#             if m:
-#                 # Invalid, but might be an image with a link in its caption
-#                 might_be_img = true
-#                 label = m.group(2)
-#                 if '%' in m.group(1):
-#                     m.group(1) = rawurldecode(m.group(1))
-#                 trail = ""
-#             else:		# Invalid form; output directly
-#                 s += prefix + '[[' + line
-#                 continue
-
-#         origLink = m.group(1)
-
-#         # Dont allow internal links to pages containing
-#         # PROTO: where PROTO is a valid URL protocol these
-#         # should be external links.
-#         if (preg_match('/^(?i:' + self.mUrlProtocols + ')/', origLink)) {
-#             s += prefix + '[[' + line
-#             continue
-#         }
-
-#         # Make subpage if necessary
-#         if useSubpages:
-#             link = self.maybeDoSubpageLink(origLink, label)
-#         else:
-#             link = origLink
-
-#         noforce = origLink[0] != ':'
-#         if not noforce:
-#             # Strip off leading ':'
-#             link = link[1:]
-
-#         nt = Title::newFromText(self.mStripState.unstripNoWiki(link))
-#         if nt is None:
-#             s += prefix + '[[' + line
-#             continue
-
-#         ns = nt.getNamespace()
-#         iw = nt.getInterwiki()
-
-#         if might_be_img {	# if this is actually an invalid link
-#             if (ns == NS_FILE and noforce) { # but might be an image
-#                 found = False
-#                 while True:
-#                     # look at the next 'line' to see if we can close it there
-#                     next_line = iterBrakets.next()
-#                     if not next_line:
-#                         break
-#                     m = explode(']]', next_line, 3)
-#                     if m.lastindex == 3:
-#                         # the first ]] closes the inner link, the second the image
-#                         found = True
-#                         label += "[[%s]]%s" % (m.group(0), m.group(1))
-#                         trail = m.group(2)
-#                         break
-#                     elif m.lastindex == 2:
-#                         # if there is exactly one ]] that is fine, we will keep looking
-#                         label += "[[{m[0]}]]{m.group(1)}"
-#                     else:
-#                         # if next_line is invalid too, we need look no further
-#                         label += '[[' + next_line
-#                         break
-#                 if not found:
-#                     # we couldnt find the end of this imageLink, so output it raw
-#                     # but dont ignore what might be perfectly normal links in the text we ve examined
-#                     holders.merge(self.replaceInternalLinks2(label))
-#                     s += "{prefix}[[%s|%s" % (link, text)
-#                     # note: no trail, because without an end, there *is* no trail
-#                     continue
-#             } else: # it is not an image, so output it raw
-#                 s += "{prefix}[[%s|%s" % (link, text)
-#                 # note: no trail, because without an end, there *is* no trail
-#                      continue
-#         }
-
-#         wasblank = (text == '')
-#         if wasblank:
-#             text = link
-#         else:
-#             # Bug 4598 madness.  Handle the quotes only if they come from the alternate part
-#             # [[Lista d''e paise d''o munno]] . <a href="...">Lista d''e paise d''o munno</a>
-#             # [[Criticism of Harry Potter|Criticism of ''Harry Potter'']]
-#             #    . <a href="Criticism of Harry Potter">Criticism of <i>Harry Potter</i></a>
-#             text = self.doQuotes(text)
-
-#         # Link not escaped by : , create the various objects
-#         if noforce and not nt.wasLocalInterwiki():
-#             # Interwikis
-#             if iw and mOptions.getInterwikiMagic() and nottalk and (
-#                     Language::fetchLanguageName(iw, None, 'mw') or
-#                     in_array(iw, wgExtraInterlanguageLinkPrefixes)):
-#                 # Bug 24502: filter duplicates
-#                 if iw not in mLangLinkLanguages:
-#                     self.mLangLinkLanguages[iw] = True
-#                     self.mOutput.addLanguageLink(nt.getFullText())
-
-#                 s = rstrip(s + prefix)
-#                 s += strip(trail, "\n") == '' ? '': prefix + trail
-#                 continue
-
-#             if ns == NS_FILE:
-#                 if not wfIsBadImage(nt.getDBkey(), self.mTitle):
-#                     if wasblank:
-#                         # if no parameters were passed, text
-#                         # becomes something like "File:Foo.png",
-#                         # which we dont want to pass on to the
-#                         # image generator
-#                         text = ''
-#                     else:
-#                         # recursively parse links inside the image caption
-#                         # actually, this will parse them in any other parameters, too,
-#                         # but it might be hard to fix that, and it doesnt matter ATM
-#                         text = self.replaceExternalLinks(text)
-#                         holders.merge(self.replaceInternalLinks2(text))
-#                     # cloak any absolute URLs inside the image markup, so replaceExternalLinks() wont touch them
-#                     s += prefix + self.armorLinks(
-#                         self.makeImage(nt, text, holders)) + trail
-#                 else:
-#                     s += prefix + trail
-#                 continue
-
-#             if ns == NS_CATEGORY:
-#                 s = rstrip(s + "\n") # bug 87
-
-#                 if wasblank:
-#                     sortkey = self.getDefaultSort()
-#                 else:
-#                     sortkey = text
-#                 sortkey = Sanitizer::decodeCharReferences(sortkey)
-#                 sortkey = str_replace("\n", '', sortkey)
-#                 sortkey = self.getConverterLanguage().convertCategoryKey(sortkey)
-#                 self.mOutput.addCategory(nt.getDBkey(), sortkey)
-
-#                 s += strip(prefix + trail, "\n") == '' ? '' : prefix + trail
-
-#                 continue
-#             }
-#         }
-
-#         # Self-link checking. For some languages, variants of the title are checked in
-#         # LinkHolderArray::doVariants() to allow batching the existence checks necessary
-#         # for linking to a different variant.
-#         if ns != NS_SPECIAL and nt.equals(self.mTitle) and !nt.hasFragment():
-#             s += prefix + Linker::makeSelfLinkObj(nt, text, '', trail)
-#                  continue
-
-#         # NS_MEDIA is a pseudo-namespace for linking directly to a file
-#         # @todo FIXME: Should do batch file existence checks, see comment below
-#         if ns == NS_MEDIA:
-#             # Give extensions a chance to select the file revision for us
-#             options = []
-#             descQuery = False
-#             Hooks::run('BeforeParserFetchFileAndTitle',
-#                        [this, nt, &options, &descQuery])
-#             # Fetch and register the file (file title may be different via hooks)
-#             file, nt = self.fetchFileAndTitle(nt, options)
-#             # Cloak with NOPARSE to avoid replacement in replaceExternalLinks
-#             s += prefix + self.armorLinks(
-#                 Linker::makeMediaLinkFile(nt, file, text)) + trail
-#             continue
-
-#         # Some titles, such as valid special pages or files in foreign repos, should
-#         # be shown as bluelinks even though they are not included in the page table
-#         #
-#         # @todo FIXME: isAlwaysKnown() can be expensive for file links; we should really do
-#         # batch file existence checks for NS_FILE and NS_MEDIA
-#         if iw == '' and nt.isAlwaysKnown():
-#             self.mOutput.addLink(nt)
-#             s += self.makeKnownLinkHolder(nt, text, array(), trail, prefix)
-#         else:
-#             # Links will be added to the output link list after checking
-#             s += holders.makeHolder(nt, text, array(), trail, prefix)
-#     }
-#     return holders
+    if return_anchor_text:
+        return res + text[cur:], phrase_list
+    else:
+        return res + text[cur:]
 
 
 def makeInternalLink(title, label):
@@ -2484,7 +2493,6 @@ def replaceExternalLinks(text):
     for m in ExtLinkBracketedRegex.finditer(text):
         s += text[cur:m.start()]
         cur = m.end()
-
         url = m.group(1)
         label = m.group(3)
 
@@ -2635,7 +2643,7 @@ def compact(text):
                     headers.clear()
                     # use item count for #-lines
                     listCount[i - 1] += 1
-                    bullet = 'BULLET::::%d. ' % listCount[i - 1] if n == '#' else 'BULLET::::- '
+                    bullet = '(%d) ' % listCount[i - 1] if n == '#' else '(-) '
                     page.append('{0:{1}s}'.format(bullet, len(listLevel)) + line)
                 elif options.toHTML:
                     if n not in listItem:
@@ -2659,7 +2667,7 @@ def compact(text):
             if options.keepSections:
                 items = sorted(headers.items())
                 for i, v in items:
-                    page.append("Section::::" + v)
+                    page.append('Section' + (':' * i) + v)
             headers.clear()
             page.append(line)  # first line
             emptySection = False
@@ -2668,6 +2676,220 @@ def compact(text):
             if line[0] != ' ':  # dangerous
                 page.append(line)
     return page
+
+
+def remove_trailing_sections(text):
+    lines = [l.strip() for l in text.split('\n') if len(l.strip()) > 0]
+    trailing_section_names = ['see also', 'further reading', 'references', 'external links']
+    start_line = -1
+    for lid, line in enumerate(lines):
+        # Handle section titles
+        m = section.match(line)
+        if m:
+            title = m.group(2)
+            if title.strip().lower() in trailing_section_names:
+                start_line = lid
+                break
+
+    if start_line > 0:
+        return '\n'.join(lines[: start_line])
+    else:
+        return text
+
+
+def extract_seealso(text):
+    within_section = False
+    seealso_phrases = []
+
+    lines = [l.strip() for l in text.split('\n') if len(l.strip()) > 0]
+    for line in lines:
+        # Handle section titles
+        m = section.match(line)
+        if m:
+            title = m.group(2)
+            if title.strip().lower() == 'see also':
+                # find 'See Also' section
+                within_section = True
+                continue
+            elif within_section:
+                # reach end of 'See Also' section
+                break
+        if within_section:
+            line, anchor_phrases = replaceInternalLinks(line, return_anchor_text=True)
+            seealso_phrases.extend(anchor_phrases)
+
+    seealso_phrases = list(set(seealso_phrases))
+    return seealso_phrases
+
+
+
+def compact_kp(text):
+    """Deal with headers, lists, empty sections, residuals of tables.
+    :param text: convert to HTML.
+    """
+    page = []             # list of paragraph
+    headers = {}          # Headers for unfilled sections
+    emptySection = False  # empty sections are discarded
+    listLevel = []        # nesting of lists
+    listCount = []        # count of each list (it should be always in the same length of listLevel)
+
+    sections = []
+    cur_section = {
+        'headers': [],
+        'text': []
+    }
+
+    for line in text.split('\n'):
+        if not line:            # collapse empty lines
+            # if there is an opening list, close it if we see an empty line
+            if len(listLevel):
+                page.append(line)
+                cur_section['text'].append(line)
+
+                if options.toHTML:
+                    for c in reversed(listLevel):
+                        page.append(listClose[c])
+                listLevel = []
+                listCount = []
+                emptySection = False
+            elif page and page[-1]:
+                page.append('')
+            continue
+        # Handle section titles
+        m = section.match(line)
+        if m:
+            # push previous non-empty section to queue
+            if len(cur_section['text']) > 0:
+                sections.append(cur_section)
+
+            # curate the new section title
+            title = m.group(2)
+            lev = len(m.group(1)) # header level
+            if options.toHTML:
+                page.append("<h%d>%s</h%d>" % (lev, title, lev))
+            # terminate sentence.
+            # if title and title[-1] not in '!?':
+            #     title += '.'
+            headers[lev] = title
+
+            # drop previous headers
+            for i in list(headers.keys()):
+                if i > lev:
+                    del headers[i]
+
+            cur_section = {
+                'headers': [],
+                'text': []
+            }
+
+            emptySection = True
+            listLevel = []
+            listCount = []
+
+            continue
+
+        # Handle page title
+        elif line.startswith('++'):
+            title = line[2:-2]
+            if title:
+                if title[-1] not in '!?':
+                    title += '.'
+                page.append(title)
+        # handle indents
+        elif line[0] == ':':
+            page.append(line.lstrip(':*#;'))
+            cur_section['text'].append(line.lstrip(':*#;'))
+            continue
+        # handle lists
+        elif line[0] in '*#;:':
+            i = 0
+            # c: current level char
+            # n: next level char
+            for c, n in zip_longest(listLevel, line, fillvalue=''):
+                if not n or n not in '*#;:': # shorter or different
+                    if c:
+                        if options.toHTML:
+                            page.append(listClose[c])
+                        listLevel = listLevel[:-1]
+                        listCount = listCount[:-1]
+                        continue
+                    else:
+                        break
+                # n != ''
+                if c != n and (not c or (c not in ';:' and n not in ';:')):
+                    if c:
+                        # close level
+                        if options.toHTML:
+                            page.append(listClose[c])
+                        listLevel = listLevel[:-1]
+                        listCount = listCount[:-1]
+                    listLevel += n
+                    listCount.append(0)
+                    if options.toHTML:
+                        page.append(listOpen[n])
+                i += 1
+            n = line[i - 1]  # last list char
+            line = line[i:].strip()
+            if line:  # FIXME: n is '"'
+                if options.keepLists:
+                    if options.keepSections:
+                        # emit open sections
+                        items = sorted(headers.items())
+                        for k, v in items:
+                            page.append(("Section-%d:" % k) + v)
+
+                    cur_section['headers'] = list(headers.values())
+                    # headers.clear()
+
+                    # use item count for #-lines
+                    listCount[i - 1] += 1
+                    bullet = '(%d) ' % listCount[i - 1] if n == '#' else '(-) '
+                    _line = '{0:{1}s}'.format(bullet, len(listLevel)) + line
+                    page.append(_line)
+                    cur_section['text'].append(_line)
+                elif options.toHTML:
+                    if n not in listItem:
+                        n = '*'
+                    page.append(listItem[n] % line)
+        elif len(listLevel):
+            if options.toHTML:
+                for c in reversed(listLevel):
+                    page.append(listClose[c])
+            listLevel = []
+            listCount = []
+
+            page.append(line)
+            cur_section['text'].append(line)
+
+        # Drop residuals of lists
+        elif line[0] in '{|' or line[-1] == '}':
+            continue
+        # Drop irrelevant lines
+        elif (line[0] == '(' and line[-1] == ')') or line.strip('.-') == '':
+            continue
+        elif len(headers):
+            # indicate this is the 1st text of a non-empty section
+            if options.keepSections:
+                items = sorted(headers.items())
+                for i, v in items:
+                    page.append('Section' + (':' * i) + v)
+            cur_section['headers'] = list(headers.values())
+            cur_section['text'].append(line)
+
+            # headers.clear()
+            page.append(line)  # first line
+            emptySection = False
+
+        elif not emptySection:
+            # Drop preformatted
+            if line[0] != ' ':  # dangerous
+                page.append(line)
+                cur_section['text'].append(line)
+
+    if len(cur_section['text']):
+        sections.append(cur_section)
+
+    return page, sections
 
 
 def handle_unicode(entity):
@@ -3141,6 +3363,13 @@ def main():
                         help="compress output files using bzip")
     groupO.add_argument("--json", action="store_true",
                         help="write output in json format instead of the default one")
+    groupO.add_argument("--dump_type", default="fulltext", choices=["fulltext", "paragraph", "phrase"],
+                        help="in which way to write to disk")
+    groupO.add_argument("--max_word_per_example", type=int, default=512,
+                        help="following RoBERTa, we concatenate short paragraphs into a long text.")
+    groupO.add_argument("--min_word_per_example", type=int, default=10,
+                        help="drop off too short sections.")
+    groupO.add_argument("-verbose", "--verbose", action="store_true", help="")
 
 
     groupP = parser.add_argument_group('Processing')
@@ -3174,6 +3403,11 @@ def main():
                         help="Whether to extract page categories, when used, --category_surface is also required (default=%(default)s)")
     groupP.add_argument("--category_surface", type=str, default=options.category_surface,
                         help="How `Category` is written in the wiki namespace. E.g. for English: `Category`, for French: `Catégorie`")
+    groupP.add_argument("--extract_seealso", action="store_true",
+                        help="Whether to extract internal reference in See Also section.")
+    groupP.add_argument("--remove_trailing_sections", action="store_true",
+                        help="Whether to remove some common but less informative sections like External links, references.")
+
     default_process_count = max(1, cpu_count() - 1)
     parser.add_argument("--processes", type=int, default=default_process_count,
                         help="Number of processes to use (default %(default)s)")
@@ -3200,8 +3434,11 @@ def main():
     options.keepLists = args.lists
     options.toHTML = args.html
     options.write_json = args.json
+    options.dump_type = args.dump_type
     options.print_revision = args.revision
-    options.min_text_length = args.min_text_length
+    options.max_word_per_example = args.max_word_per_example
+    options.min_word_per_example = args.min_word_per_example
+    options.verbose = args.verbose
     if args.html:
         options.keepLinks = True
 
@@ -3210,6 +3447,8 @@ def main():
     options.keep_tables = args.keep_tables
     options.extract_categories = args.extract_categories
     options.category_surface = args.category_surface
+    options.extract_seealso = args.extract_seealso
+    options.remove_trailing_sections = args.remove_trailing_sections
 
     try:
         power = 'kmg'.find(args.bytes[-1].lower()) + 1
@@ -3294,8 +3533,8 @@ def main():
                         options.filter_category_include.add(line)
                 except Exception as e:
                     error_cnt += 1
-                    print(u"Category not in utf8, ignored. error cnt %d:\t%s" % (error_cnt,e))
-                    print(line)
+                    logging.error(u"Category not in utf8, ignored. error cnt %d:\t%s" % (error_cnt,e))
+                    logging.error(line)
             logging.info("Excluding categories:",)
             logging.info(str(options.filter_category_exclude))
             logging.info("Including categories:")

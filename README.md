@@ -1,10 +1,10 @@
 # WikiExtractor
-[WikiExtractor.py](http://medialab.di.unipi.it/wiki/Wikipedia_Extractor) is a Python script that extracts and cleans text from a [Wikipedia database dump](http://download.wikimedia.org/).
+[WikiExtractor.py](http://medialab.di.unipi.it/wiki/Wikipedia_Extractor) is a Python script that extracts and cleans text from a [Wikipedia database dump](https://dumps.wikimedia.org/).
 
 The tool is written in Python and requires Python 3 but no additional library.
 **Warning**: problems have been reported on Windows due to poor support for `StringIO` in the Python implementation on Windows.
 
-For further information, see the [project Home Page](http://medialab.di.unipi.it/wiki/Wikipedia_Extractor) or the [Wiki](https://github.com/attardi/wikiextractor/wiki).
+For further information, see the [Wiki](https://github.com/attardi/wikiextractor/wiki).
 
 # Wikipedia Cirrus Extractor
 
@@ -27,9 +27,9 @@ In order to speed up processing:
 
 The script may be invoked directly:
 
-    python -m wikiextractor.WikiExtractor
+    python -m wikiextractor.WikiExtractor <Wikipedia dump file>
 
-however it can also be installed from `PyPi` by doing:
+It can also be installed from `PyPi` by doing:
 
     pip install wikiextractor
 
@@ -37,113 +37,85 @@ or locally with:
 
     (sudo) python setup.py install
 
+The installer also installs two scripts for direct invocation:
+
+    wikiextractor  	(equivalent to python -m wikiextractor.WikiExtractor)
+    extractPage		(to extract a single page from a dump)
+
 ## Usage
 
 ### Wikiextractor
 The script is invoked with a Wikipedia dump file as an argument:
 
-    python -m wikiextractor.WikiExtractor <Wikipedia dump file>
+    python -m wikiextractor.WikiExtractor <Wikipedia dump file> [--templates <extracted template file>]
+
+The option `--templates` extracts the templates to a local file, which can be reloaded to reduce the time to perform extraction.
 
 The output is stored in several files of similar size in a given directory.
-Each file will contains several documents in this [document format](wiki/File-Format).
+Each file will contains several documents in this [document format](https://github.com/attardi/wikiextractor/wiki/File-Format).
 
-    usage: WikiExtractor.py [-h] [-o OUTPUT] [-b n[KMG]] [-c] [--json] [--html]
-                            [-l] [-s] [--lists] [-ns ns1,ns2]
-                            [--templates TEMPLATES] [--no-templates] [-r]
-                            [--min_text_length MIN_TEXT_LENGTH]
-                            [--filter_category path_of_categories_file]
-                            [--filter_disambig_pages] [-it abbr,b,big]
-                            [-de gallery,timeline,noinclude] [--keep_tables]
-                            [--processes PROCESSES] [-q] [--debug] [-a] [-v]
-                            [--log_file]
-                            input
+```
+usage: wikiextractor [-h] [-o OUTPUT] [-b n[KMG]] [-c] [--json] [--html] [-l] [-ns ns1,ns2]
+			 [--templates TEMPLATES] [--no-templates] [--html-safe HTML_SAFE] [--processes PROCESSES]
+			 [-q] [--debug] [-a] [-v]
+			 input
 
-    Wikipedia Extractor:
-    Extracts and cleans text from a Wikipedia database dump and stores output in a
-    number of files of similar size in a given directory.
-    Each file will contain several documents in the format:
+Wikipedia Extractor:
+Extracts and cleans text from a Wikipedia database dump and stores output in a
+number of files of similar size in a given directory.
+Each file will contain several documents in the format:
 
-        <doc id="" revid="" url="" title="">
-            ...
-            </doc>
+	<doc id="" url="" title="">
+	    ...
+	    </doc>
 
-    If the program is invoked with the --json flag, then each file will
-    contain several documents formatted as json ojects, one per line, with
-    the following structure
+If the program is invoked with the --json flag, then each file will                                            
+contain several documents formatted as json ojects, one per line, with                                         
+the following structure
 
-        {"id": "", "revid": "", "url":"", "title": "", "text": "..."}
+	{"id": "", "revid": "", "url": "", "title": "", "text": "..."}
 
-    Template expansion requires preprocessing first the whole dump and
-    collecting template definitions.
+The program performs template expansion by preprocesssng the whole dump and
+collecting template definitions.
 
-    positional arguments:
-      input                 XML wiki dump file
+positional arguments:
+  input                 XML wiki dump file
 
-    optional arguments:
-      -h, --help            show this help message and exit
-      --processes PROCESSES
-                            Number of processes to use (default 1)
+optional arguments:
+  -h, --help            show this help message and exit
+  --processes PROCESSES
+			    Number of processes to use (default 79)
 
-    Output:
-      -o OUTPUT, --output OUTPUT
-                            directory for extracted files (or '-' for dumping to
-                            stdout)
-      -b n[KMG], --bytes n[KMG]
-                            maximum bytes per output file (default 1M)
-      -c, --compress        compress output files using bzip
-      --json                write output in json format instead of the default one
+Output:
+  -o OUTPUT, --output OUTPUT
+			    directory for extracted files (or '-' for dumping to stdout)
+  -b n[KMG], --bytes n[KMG]
+			    maximum bytes per output file (default 1M)
+  -c, --compress        compress output files using bzip
+  --json                write output in json format instead of the default <doc> format
 
-    Processing:
-      --html                produce HTML output, subsumes --links
-      -l, --links           preserve links
-      -s, --sections        preserve sections
-      --lists               preserve lists
-      -ns ns1,ns2, --namespaces ns1,ns2
-                            accepted namespaces in links
-      --templates TEMPLATES
-                            use or create file containing templates
-      --no-templates        Do not expand templates
-      -r, --revision        Include the document revision id (default=False)
-      --min_text_length MIN_TEXT_LENGTH
-                            Minimum expanded text length required to write
-                            document (default=0)
-      --filter_category path_of_categories_file
-                            Include or exclude specific categories from the dataset. Specify the categories in
-                            file 'path_of_categories_file'. Format:
-                            One category one line, and if the line starts with:
-                                1) #: Comments, ignored;
-                                2) ^: the categories will be in excluding-categories
-                                3) others: the categories will be in including-categories.
-                            Priority:
-                                1) If excluding-categories is not empty, and any category of a page exists in excluding-categories, the page will be excluded; else
-                                2) If including-categories is not empty, and no category of a page exists in including-categories, the page will be excluded; else
-                                3) the page will be included
+Processing:
+  --html                produce HTML output, subsumes --links
+  -l, --links           preserve links
+  -ns ns1,ns2, --namespaces ns1,ns2
+			    accepted namespaces
+  --templates TEMPLATES
+			    use or create file containing templates
+  --no-templates        Do not expand templates
+  --html-safe HTML_SAFE
+			    use to produce HTML safe output within <doc>...</doc>
 
-      --filter_disambig_pages
-                            Remove pages from output that contain disabmiguation
-                            markup (default=False)
-      -it abbr,b,big, --ignored_tags abbr,b,big
-                            comma separated list of tags that will be dropped,
-                            keeping their content
-      -de gallery,timeline,noinclude, --discard_elements gallery,timeline,noinclude
-                            comma separated list of elements that will be removed
-                            from the article text
-      --keep_tables         Preserve tables in the output article text
-                            (default=False)
-
-    Special:
-      -q, --quiet           suppress reporting progress info
-      --debug               print debug info
-      -a, --article         analyze a file containing a single article (debug
-                            option)
-      -v, --version         print program version
-      --log_file            specify a file to save the log information.
-
+Special:
+  -q, --quiet           suppress reporting progress info
+  --debug               print debug info
+  -a, --article         analyze a file containing a single article (debug option)
+  -v, --version         print program version
+```
 
 Saving templates to a file will speed up performing extraction the next time,
 assuming template definitions have not changed.
 
-Option --no-templates significantly speeds up the extractor, avoiding the cost
+Option `--no-templates` significantly speeds up the extractor, avoiding the cost
 of expanding [MediaWiki templates](https://www.mediawiki.org/wiki/Help:Templates).
 
 For further information, visit [the documentation](http://attardi.github.io/wikiextractor).
@@ -185,6 +157,25 @@ Processing:
 Special:
   -q, --quiet           suppress reporting progress info
   -v, --version         print program version
+~~~
+
+### extractPage
+Extract a single page from a Wikipedia dump file.
+
+~~~
+usage: extractPage [-h] [--id ID] [--template] [-v] input
+
+Wikipedia Page Extractor:
+Extracts a single page from a Wikipedia dump file.
+
+positional arguments:
+  input          XML wiki dump file
+
+optional arguments:
+  -h, --help     show this help message and exit
+  --id ID        article number
+  --template     template number
+  -v, --version  print program version
 ~~~
 
 ## License

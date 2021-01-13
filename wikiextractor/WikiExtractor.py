@@ -43,14 +43,18 @@ Each file will contain several documents in the format:
         ...
         </doc>
 
-This version performs template expansion by preprocesssng the whole dump and
+If the program is invoked with the --json flag, then each file will
+contain several documents formatted as json ojects, one per line, with
+the following structure
+
+    {"id": "", "revid": "", "url": "", "title": "", "text": "..."}
+
+The program performs template expansion by preprocesssng the whole dump and
 collecting template definitions.
 """
 
 import argparse
 import bz2
-import codecs
-import fileinput
 import logging
 import os.path
 import re  # TODO use regex when it will be standard
@@ -59,12 +63,12 @@ from io import StringIO
 from multiprocessing import Queue, Process, cpu_count
 from timeit import default_timer
 
-from wikiextractor.extract import Extractor, ignoreTag
+from wikiextractor.extract import Extractor, ignoreTag, define_template, acceptedNamespaces
 
 # ===========================================================================
 
 # Program version
-version = '3.0'
+__version__ = '3.0.5'
 
 ##
 # Defined in <siteinfo>
@@ -81,10 +85,6 @@ templatePrefix = ''
 # The namespace used for module definitions
 # It is the name associated with namespace key=828 in the siteinfo header.
 moduleNamespace = ''
-
-# This is obtained from <siteinfo>
-urlbase = ''
-
 
 # ----------------------------------------------------------------------
 # Modules
@@ -113,7 +113,7 @@ modules = {
 # Output
 
 
-class NextFile(object):
+class NextFile():
 
     """
     Synchronous generation of next available file name.
@@ -137,14 +137,14 @@ class NextFile(object):
 
     def _dirname(self):
         char1 = self.dir_index % 26
-        char2 = self.dir_index / 26 % 26
-        return os.path.join(self.path_name, '%c%c' % (int(ord('A') + char2), int(ord('A') + char1)))
+        char2 = int(self.dir_index / 26) % 26
+        return os.path.join(self.path_name, '%c%c' % (int(ord('A')) + char2, int(ord('A')) + char1))
 
     def _filepath(self):
         return '%s/wiki_%02d' % (self._dirname(), self.file_index)
 
 
-class OutputSplitter(object):
+class OutputSplitter():
 
     """
     File-like object, that splits output to multiple files of a given max size.
@@ -198,11 +198,13 @@ def load_templates(file, output_file=None):
     global moduleNamespace, modulePrefix
     modulePrefix = moduleNamespace + ':'
     articles = 0
+    templates = 0
     page = []
     inText = False
     if output_file:
-        output = codecs.open(output_file, 'wb', 'utf-8')
+        output = open(output_file, 'w')
     for line in file:
+        #line = line.decode('utf-8')
         if '<' not in line:  # faster than doing re.search()
             if inText:
                 page.append(line)
@@ -237,15 +239,16 @@ def load_templates(file, output_file=None):
             # FIXME: should reconstruct also moduleNamespace
             if title.startswith(templatePrefix):
                 define_template(title, page)
+                templates += 1
             # save templates and modules to file
             if output_file and (title.startswith(templatePrefix) or
                                 title.startswith(modulePrefix)):
                 output.write('<page>\n')
-                output.write('   <title>%s</title>\n' % title)
+                output.write('   <title>%s</title>\n' % title.encode('utf-8'))
                 output.write('   <ns>10</ns>\n')
                 output.write('   <text>')
                 for line in page:
-                    output.write(line)
+                    output.write(line.encode('utf-8'))
                 output.write('   </text>\n')
                 output.write('</page>\n')
             page = []
@@ -254,11 +257,27 @@ def load_templates(file, output_file=None):
                 logging.info("Preprocessed %d pages", articles)
     if output_file:
         output.close()
-        logging.info("Saved %d templates to '%s'", len(templates), output_file)
+        logging.info("Saved %d templates to '%s'", templates, output_file)
+    return templates
+
+
+def decode_open(filename, mode='rt', encoding='utf-8'):
+    """
+    Open a file, decode and decompress, depending on extension `gz`, or 'bz2`.
+    :param filename: the file to open.
+    """
+    ext = os.path.splitext(filename)[1]
+    if ext == '.gz':
+        import gzip
+        return gzip.open(filename, mode, encoding=encoding)
+    elif ext == '.bz2':
+        return bz2.open(filename, mode=mode, encoding=encoding)
+    else:
+        return open(filename, mode, encoding=encoding)
 
 
 def process_dump(input_file, template_file, out_file, file_size, file_compress,
-                 process_count):
+                 process_count, html_safe):
     """
     :param input_file: name of the wikipedia dump file; '-' to read from stdin
     :param template_file: optional file with template definitions.
@@ -267,18 +286,17 @@ def process_dump(input_file, template_file, out_file, file_size, file_compress,
     :param file_compress: whether to compress files with bzip.
     :param process_count: number of extraction processes to spawn.
     """
-    global urlbase
     global knownNamespaces
     global templateNamespace, templatePrefix
     global moduleNamespace, modulePrefix
 
-    if input_file == '-':
-        input = sys.stdin
-    else:
-        input = fileinput.FileInput(input_file, openhook=fileinput.hook_compressed)
+    urlbase = ''                # This is obtained from <siteinfo>
+
+    input = decode_open(input_file)
 
     # collect siteinfo
     for line in input:
+        line = line #.decode('utf-8')
         m = tagRE.search(line)
         if not m:
             continue
@@ -304,19 +322,19 @@ def process_dump(input_file, template_file, out_file, file_size, file_compress,
         template_load_start = default_timer()
         if template_file and os.path.exists(template_file):
             logging.info("Preprocessing '%s' to collect template definitions: this may take some time.", template_file)
-            file = fileinput.FileInput(template_file, openhook=fileinput.hook_compressed)
-            load_templates(file)
+            file = decode_open(template_file)
+            templates = load_templates(file)
             file.close()
         else:
             if input_file == '-':
                 # can't scan then reset stdin; must error w/ suggestion to specify template_file
                 raise ValueError("to use templates with stdin dump, must supply explicit template-file")
             logging.info("Preprocessing '%s' to collect template definitions: this may take some time.", input_file)
-            load_templates(input, template_file)
+            templates = load_templates(input, template_file)
             input.close()
-            input = fileinput.FileInput(input_file, openhook=fileinput.hook_compressed)
+            input = decode_open(input_file)
         template_load_elapsed = default_timer() - template_load_start
-        logging.info("Loaded %d templates in %.1fs", len(templates), template_load_elapsed)
+        logging.info("Loaded %d templates in %.1fs", templates, template_load_elapsed)
 
     if out_file == '-':
         output = sys.stdout
@@ -350,7 +368,7 @@ def process_dump(input_file, template_file, out_file, file_size, file_compress,
     workers = []
     for _ in range(max(1, process_count)):
         extractor = Process(target=extract_process,
-                            args=(jobs_queue, output_queue))
+                            args=(jobs_queue, output_queue, html_safe))
         extractor.daemon = True  # only live while parent process lives
         extractor.start()
         workers.append(extractor)
@@ -360,8 +378,9 @@ def process_dump(input_file, template_file, out_file, file_size, file_compress,
     # we collect individual lines, since str.join() is significantly faster
     # than concatenation
     page = []
-    id = None
-    last_id = None
+    id = ''
+    revid = ''
+    last_id = ''
     ordinal = 0  # page count
     inText = False
     redirect = False
@@ -379,6 +398,8 @@ def process_dump(input_file, template_file, out_file, file_size, file_compress,
             redirect = False
         elif tag == 'id' and not id:
             id = m.group(3)
+        elif tag == 'id' and id: # <revision> <id></id> </revision>
+            revid = m.group(3)
         elif tag == 'title':
             title = m.group(3)
         elif tag == 'redirect':
@@ -397,13 +418,14 @@ def process_dump(input_file, template_file, out_file, file_size, file_compress,
             page.append(line)
         elif tag == '/page':
             colon = title.find(':')
-            if (colon < 0 or title[:colon] in acceptedNamespaces) and id != last_id and \
-                    not redirect and not title.startswith(templateNamespace):
-                job = (id, title, page, ordinal)
+            if (colon < 0 or (title[:colon] in acceptedNamespaces) and id != last_id and
+                    not redirect and not title.startswith(templateNamespace)):
+                job = (id, revid, urlbase, title, page, ordinal)
                 jobs_queue.put(job)  # goes to any available extract_process
                 last_id = id
                 ordinal += 1
-            id = None
+            id = ''
+            revid = ''
             page = []
 
     input.close()
@@ -432,18 +454,19 @@ def process_dump(input_file, template_file, out_file, file_size, file_compress,
 # Multiprocess support
 
 
-def extract_process(jobs_queue, output_queue):
+def extract_process(jobs_queue, output_queue, html_safe):
     """Pull tuples of raw page content, do CPU/regex-heavy fixup, push finished text
     :param jobs_queue: where to get jobs.
     :param output_queue: where to queue extracted text for output.
+    :html_safe: whether to convert entities in text to HTML.
     """
     while True:
-        job = jobs_queue.get()  # job is (id, title, page, ordinal)
+        job = jobs_queue.get()  # job is (id, revid, urlbase, title, page, ordinal)
         if job:
             out = StringIO()  # memory buffer
-            Extractor(*job[:3]).extract(out)  # (id, title, page)
+            Extractor(*job[:-1]).extract(out, html_safe)  # (id, urlbase, title, page)
             text = out.getvalue()
-            output_queue.put((job[3], text))  # (ordinal, extracted_text)
+            output_queue.put((job[-1], text))  # (ordinal, extracted_text)
             out.close()
         else:
             break
@@ -487,7 +510,7 @@ minFileSize = 200 * 1024
 
 def main():
     global urlbase, acceptedNamespaces
-    global expand_templates, templateCache, escape_doc
+    global expand_templates, templateCache
 
     parser = argparse.ArgumentParser(prog=os.path.basename(sys.argv[0]),
                                      formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -502,6 +525,8 @@ def main():
                         metavar="n[KMG]")
     groupO.add_argument("-c", "--compress", action="store_true",
                         help="compress output files using bzip")
+    groupO.add_argument("--json", action="store_true",
+                        help="write output in json format instead of the default <doc> format")
 
     groupP = parser.add_argument_group('Processing')
     groupP.add_argument("--html", action="store_true",
@@ -514,8 +539,8 @@ def main():
                         help="use or create file containing templates")
     groupP.add_argument("--no-templates", action="store_false",
                         help="Do not expand templates")
-    groupP.add_argument("--escapedoc", action="store_true",
-                        help="use to escape the contents of the output <doc>...</doc>")
+    groupP.add_argument("--html-safe", default=True,
+                        help="use to produce HTML safe output within <doc>...</doc>")
     default_process_count = cpu_count() - 1
     parser.add_argument("--processes", type=int, default=default_process_count,
                         help="Number of processes to use (default %(default)s)")
@@ -528,18 +553,18 @@ def main():
     groupS.add_argument("-a", "--article", action="store_true",
                         help="analyze a file containing a single article (debug option)")
     groupS.add_argument("-v", "--version", action="version",
-                        version='%(prog)s ' + version,
+                        version='%(prog)s ' + __version__,
                         help="print program version")
 
     args = parser.parse_args()
 
     Extractor.keepLinks = args.links
-    Extractor.toHTML = args.html
+    Extractor.HtmlFormatting = args.html
     if args.html:
         Extractor.keepLinks = True
+    Extractor.to_json = args.json
 
     expand_templates = args.no_templates
-    escape_doc = args.escapedoc
 
     try:
         power = 'kmg'.find(args.bytes[-1].lower()) + 1
@@ -578,16 +603,23 @@ def main():
                     load_templates(file)
 
         with open(input_file) as file:
-            page = file.read().decode('utf-8')
-            m = re.search(r'<id>(.*)</id>', page)
-            id = m.group(1) if m else 0
-            m = re.search(r'<title>(.*)</title>', page)
+            page = file.read()
+            ids = re.findall(r'<id>(\d*?)</id>', page)
+            id = ids[0] if ids else ''
+            revid = ids[1] if len(ids) > 1 else ''
+            m = re.search(r'<title>(.*?)</title>', page)
             if m:
                 title = m.group(1)
             else:
                 logging.error('Missing title element')
                 return
-            Extractor(id, title, [page]).extract(sys.stdout)
+            m = re.search(r'<base>(.*?)</base>', page)
+            if m:
+                base = m.group(1)
+                urlbase = base[:base.rfind("/")]
+            else:
+                urlbase = ''
+            Extractor(id, revid, urlbase, title, [page]).extract(sys.stdout)
         return
 
     output_path = args.output
@@ -599,7 +631,7 @@ def main():
             return
 
     process_dump(input_file, args.templates, output_path, file_size,
-                 args.compress, args.processes)
+                 args.compress, args.processes, args.html_safe)
 
 
 if __name__ == '__main__':

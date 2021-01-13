@@ -28,18 +28,13 @@ Extracts a single page from a Wikipedia dump file.
 """
 
 import sys, os.path
-import re, random
+import re
 import argparse
-from itertools import izip
-import logging, traceback
-import urllib
-import bz2, gzip
-from htmlentitydefs import name2codepoint
-import Queue, threading, multiprocessing
+import bz2
 
 
 # Program version
-version = '3.0'
+__version__ = '3.0.5'
 
 # ----------------------------------------------------------------------
 # READER
@@ -54,16 +49,14 @@ def process_data(input_file, id, templates=False):
     :param id: article id
     """
 
-    if input_file.lower().endswith("bz2"):
-        opener = bz2.BZ2File
+    if input_file.lower().endswith(".bz2"):
+        input = bz2.open(input_file, mode='rt', encoding='utf-8')
     else:
-        opener = open
-
-    input = opener(input_file)
+        input = open(input_file)
 
     page = []
     for line in input:
-        line = line.decode('utf-8')
+        line = line
         if '<' not in line:         # faster than doing re.search()
             if page:
                 page.append(line)
@@ -94,7 +87,7 @@ def process_data(input_file, id, templates=False):
         elif tag == '/page':
             if page:
                 page.append(line)
-                print(''.join(page).encode('utf-8'))
+                print(''.join(page))
                 if not templates:
                     break
             page = []
@@ -109,12 +102,12 @@ def main():
                                      description=__doc__)
     parser.add_argument("input",
                         help="XML wiki dump file")
-    parser.add_argument("--id", default="",
+    parser.add_argument("--id", default="1",
                         help="article number")
     parser.add_argument("--template", action="store_true",
                         help="template number")
     parser.add_argument("-v", "--version", action="version",
-                        version='%(prog)s ' + version,
+                        version='%(prog)s ' + __version__,
                         help="print program version")
 
     args = parser.parse_args()
