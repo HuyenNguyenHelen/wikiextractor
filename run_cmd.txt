@@ -4,9 +4,14 @@ conda activate /home/ubuntu/efs/.conda/kp
 
 cd /home/ubuntu/efs/rum20/data/wiki/processed/
 nohup python /home/ubuntu/efs/rum20/wikiextractor/WikiExtractor.py /home/ubuntu/efs/rum20/data/wiki/dump/enwiki-latest-pages-articles.xml --output /home/ubuntu/efs/rum20/data/wiki/processed/json_paragraph --processes 8 --no_templates --dump_type paragraph --json --extract_categories --extract_seealso --list --remove_trailing_sections > export_paragraph.out &
+17831
 
 
 
-
-nohup python /home/ubuntu/efs/rum20/wikiextractor/WikiExtractor.py /home/ubuntu/efs/rum20/data/wiki/dump/enwiki-latest-pages-articles.xml --output /home/ubuntu/efs/rum20/data/wiki/processed/json_phrase_new --processes 8 --no_templates --dump_type phrase --json --extract_categories --extract_seealso --list --remove_trailing_sections > export_phrase.out &
+nohup python /home/ubuntu/efs/rum20/wikiextractor/WikiExtractor.py /zfs1/hdaqing/rum20/kp/data/wiki/enwiki-latest-pages-articles.xml --output /home/ubuntu/efs/rum20/data/wiki/processed/json_phrase_new --processes 10 --no_templates --dump_type phrase --json --extract_categories --extract_seealso --list --remove_trailing_sections > export_phrase.out &
 15932
+
+
+# CRC
+cd /zfs1/pbrusilovsky/rum20/aws_backup/rum20/wikiextractor
+nohup python WikiExtractor.py /zfs1/hdaqing/rum20/kp/data/wiki/enwiki-latest-pages-articles.xml.bz2 --output /zfs1/hdaqing/rum20/kp/data/wiki/phrase --processes 10 --no_templates --dump_type phrase --json --extract_categories --extract_seealso --remove_trailing_sections --list  > export_phrase.out &
