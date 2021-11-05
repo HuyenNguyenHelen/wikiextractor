@@ -15,3 +15,6 @@ nohup python /home/ubuntu/efs/rum20/wikiextractor/WikiExtractor.py /zfs1/hdaqing
 # CRC
 cd /zfs1/pbrusilovsky/rum20/aws_backup/rum20/wikiextractor
 nohup python WikiExtractor.py /zfs1/hdaqing/rum20/kp/data/wiki/enwiki-latest-pages-articles.xml.bz2 --output /zfs1/hdaqing/rum20/kp/data/wiki/phrase --processes 10 --no_templates --dump_type phrase --json --extract_categories --extract_seealso --remove_trailing_sections --list  > export_phrase.out &
+
+# 103628
+nohup python WikiExtractor.py /zfs1/hdaqing/rum20/kp/data/wiki/enwiki-latest-pages-articles.xml.bz2 --output /zfs1/pbrusilovsky/rum20/google/data/roberta/data/wiki/train --processes 10 --no_templates --dump_type paragraph --json --extract_categories --extract_seealso --remove_trailing_sections --list  > /zfs1/pbrusilovsky/rum20/google/data/roberta/data/wiki/export_paragraph.out &

@@ -49,8 +49,8 @@ def ord2name(folder_ord):
     return chr(65+first_ord) + chr(65+second_ord)
 
 if __name__ == '__main__':
-    input_dir = '/home/ubuntu/efs/rum20/data/books/dump/'
-    output_base_dir = '/home/ubuntu/efs/rum20/data/books/processed/'
+    input_dir = '/zfs1/pbrusilovsky/rum20/google/data/roberta/raw_data/books/epubtxt/'
+    output_base_dir = '/zfs1/pbrusilovsky/rum20/google/data/roberta/data/book/train/'
     max_word_per_example = 512
     max_example_per_file = 500
     max_file_per_folder = 100
